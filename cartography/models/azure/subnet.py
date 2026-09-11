@@ -28,6 +28,11 @@ class AzureSubnetProperties(CartographyNodeProperties):
         "address_prefix",
         description="IPv4 or IPv6 address prefix assigned to the subnet.",
     )
+    address_prefixes: PropertyRef = PropertyRef(
+        "address_prefixes",
+        description="All address prefixes on the subnet. Dual-stack subnets carry more "
+        "than one and address_prefix then holds none of them.",
+    )
     lastupdated: PropertyRef = PropertyRef("lastupdated", set_in_kwargs=True)
 
 

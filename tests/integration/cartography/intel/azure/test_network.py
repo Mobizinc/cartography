@@ -7,6 +7,8 @@ from tests.data.azure.network import MOCK_NSGS
 from tests.data.azure.network import MOCK_PUBLIC_IPS
 from tests.data.azure.network import MOCK_SUBNETS
 from tests.data.azure.network import MOCK_VNETS
+from tests.data.azure.route_table import MOCK_ROUTE_TABLES
+from tests.data.azure.route_table import ROUTE_TABLE_ID
 from tests.integration.util import check_nodes
 from tests.integration.util import check_rels
 
@@ -14,6 +16,8 @@ TEST_SUBSCRIPTION_ID = "00-00-00-00"
 TEST_UPDATE_TAG = 123456789
 
 
+@patch("cartography.intel.azure.vnet_peering.get_vnet_peerings")
+@patch("cartography.intel.azure.route_table.get_route_tables")
 @patch("cartography.intel.azure.network.get_network_interfaces")
 @patch("cartography.intel.azure.network.get_public_ip_addresses")
 @patch("cartography.intel.azure.network.get_network_security_groups")
@@ -25,6 +29,8 @@ def test_sync_network(
     mock_get_nsgs,
     mock_get_public_ips,
     mock_get_nics,
+    mock_get_route_tables,
+    mock_get_vnet_peerings,
     neo4j_session,
 ):
     """
@@ -37,6 +43,8 @@ def test_sync_network(
     mock_get_nsgs.return_value = MOCK_NSGS
     mock_get_public_ips.return_value = MOCK_PUBLIC_IPS
     mock_get_nics.return_value = MOCK_NETWORK_INTERFACES
+    mock_get_route_tables.return_value = MOCK_ROUTE_TABLES
+    mock_get_vnet_peerings.return_value = []
 
     # Create the prerequisite AzureSubscription node
     neo4j_session.run(
@@ -100,6 +108,18 @@ def test_sync_network(
         ["_ont_name", "_ont_region", "_ont_source"],
     ) == {
         ("my-test-vnet", "eastus", "azure"),
+    }
+
+    # Assert - the subnet that declares a route table is routed by it, and the one
+    # that declares none has no edge. Both collectors run inside network.sync().
+    assert check_rels(
+        neo4j_session, "AzureSubnet", "id", "AzureRouteTable", "id", "ROUTED_BY"
+    ) == {(MOCK_SUBNETS[0]["id"], ROUTE_TABLE_ID)}
+    assert check_rels(
+        neo4j_session, "AzureRouteTable", "id", "AzureRoute", "id", "CONTAINS"
+    ) == {
+        (ROUTE_TABLE_ID, f"{ROUTE_TABLE_ID}/routes/default-to-nva"),
+        (ROUTE_TABLE_ID, f"{ROUTE_TABLE_ID}/routes/to-internet"),
     }
 
     # Assert Relationships

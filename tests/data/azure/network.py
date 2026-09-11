@@ -75,6 +75,9 @@ MOCK_SUBNETS = [
         "network_security_group": {
             "id": "/subscriptions/00-00-00-00/resourceGroups/TestRG/providers/Microsoft.Network/networkSecurityGroups/my-test-nsg",
         },
+        "route_table": {
+            "id": "/subscriptions/00-00-00-00/resourceGroups/test-rg/providers/Microsoft.Network/routeTables/rt-with-routes",
+        },
     },
     {
         "id": "/subscriptions/00-00-00-00/resourceGroups/TestRG/providers/Microsoft.Network/virtualNetworks/my-test-vnet/subnets/subnet-without-nsg",
