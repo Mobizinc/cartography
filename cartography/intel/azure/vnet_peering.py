@@ -70,6 +70,14 @@ def transform_vnet_peerings(vnet_id: str, peerings: list[dict]) -> list[dict]:
                 "allow_gateway_transit": _get_value(
                     peering, "allow_gateway_transit", "allowGatewayTransit"
                 ),
+                "allow_virtual_network_access": _get_value(
+                    peering,
+                    "allow_virtual_network_access",
+                    "allowVirtualNetworkAccess",
+                ),
+                "use_remote_gateways": _get_value(
+                    peering, "use_remote_gateways", "useRemoteGateways"
+                ),
             }
         )
     return transformed

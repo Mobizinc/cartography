@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
 from azure.core.exceptions import HttpResponseError
 
 import cartography.intel.azure.compute as compute
@@ -161,3 +162,51 @@ def _read_at(neo4j_session, vm_id):
         "MATCH (vm:AzureVirtualMachine{id: $id}) RETURN vm.power_state_read_at AS r",
         id=vm_id,
     ).single()["r"]
+
+
+@patch.object(compute, "get_client")
+def test_unreadable_inventory_does_not_delete_the_existing_vms(
+    mock_get_client, neo4j_session
+):
+    """The failure proved in evaluation: a 403 on the VM list used to empty the whole
+    subscription's inventory. The read must now fail loudly and delete nothing."""
+    # Arrange
+    mock_get_client.return_value = _compute_client()
+    neo4j_session.run(
+        "MERGE (s:AzureSubscription{id: $sub_id}) SET s.lastupdated = $tag",
+        sub_id=TEST_SUBSCRIPTION_ID,
+        tag=TEST_UPDATE_TAG,
+    )
+    # Act
+    compute.sync_virtual_machine(
+        neo4j_session,
+        MagicMock(),
+        TEST_SUBSCRIPTION_ID,
+        TEST_UPDATE_TAG,
+        {"UPDATE_TAG": TEST_UPDATE_TAG, "AZURE_SUBSCRIPTION_ID": TEST_SUBSCRIPTION_ID},
+    )
+
+    # Assert
+    before = check_nodes(neo4j_session, "AzureVirtualMachine", ["id"])
+    assert before == {(RUNNING_VM_ID,), (NO_STATUS_VM_ID,), (FORBIDDEN_VM_ID,)}
+
+    # Arrange - the next sync cannot read the inventory at all.
+    failing = MagicMock()
+    failing.virtual_machines.list_all.side_effect = HttpResponseError(
+        "(AuthorizationFailed) no access to Microsoft.Compute"
+    )
+    mock_get_client.return_value = failing
+    next_tag = TEST_UPDATE_TAG + 1
+
+    # Act and assert
+    with pytest.raises(compute.AzureVirtualMachineInventoryError):
+        compute.sync_virtual_machine(
+            neo4j_session,
+            MagicMock(),
+            TEST_SUBSCRIPTION_ID,
+            next_tag,
+            {"UPDATE_TAG": next_tag, "AZURE_SUBSCRIPTION_ID": TEST_SUBSCRIPTION_ID},
+        )
+
+    # Assert - nothing was deleted.
+    assert check_nodes(neo4j_session, "AzureVirtualMachine", ["id"]) == before

@@ -13,6 +13,8 @@ MOCK_PEERINGS = [
         "peering_state": "Connected",
         "allow_forwarded_traffic": True,
         "allow_gateway_transit": False,
+        "allow_virtual_network_access": True,
+        "use_remote_gateways": False,
         "remote_virtual_network": {"id": REMOTE_VNET_ID},
     },
     # Dropped on purpose: a peering that names no remote id is not an identity.
@@ -32,7 +34,23 @@ MOCK_PEERINGS_NESTED = [
             "peeringState": "Connected",
             "allowForwardedTraffic": True,
             "allowGatewayTransit": False,
+            "allowVirtualNetworkAccess": True,
+            "useRemoteGateways": False,
             "remoteVirtualNetwork": {"id": REMOTE_VNET_ID},
         },
+    },
+]
+
+
+#: A peering ARM reports as Connected while address space access is switched off.
+#: No traffic flows, and the graph must be able to say so.
+MOCK_PEERING_ACCESS_DISABLED = [
+    {
+        "id": f"{LOCAL_VNET_ID}/virtualNetworkPeerings/local-to-remote",
+        "name": "local-to-remote",
+        "peering_state": "Connected",
+        "allow_virtual_network_access": False,
+        "use_remote_gateways": True,
+        "remote_virtual_network": {"id": REMOTE_VNET_ID},
     },
 ]

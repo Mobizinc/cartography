@@ -1,3 +1,11 @@
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+from azure.core.exceptions import HttpResponseError
+from azure.core.exceptions import ServiceRequestTimeoutError
+
+import cartography.intel.azure.compute as compute
 from cartography.intel.azure.compute import transform_disk
 from cartography.intel.azure.compute import transform_snapshot
 from cartography.intel.azure.compute import transform_vm
@@ -101,3 +109,50 @@ def test_transform_disk_and_snapshot_flatten_sdk_38_properties():
     assert snapshot["network_access_policy"] == "AllowAll"
     assert snapshot["os_type"] == "Linux"
     assert snapshot["incremental"] is True
+
+
+def test_get_vm_list_raises_instead_of_reporting_an_empty_inventory():
+    """A failed inventory read must not become []: sync_virtual_machine would load
+    nothing and cleanup_virtual_machine would delete the subscription's whole VM
+    inventory, treating unknown coverage as authoritative absence."""
+    # Arrange
+    client = MagicMock()
+    client.virtual_machines.list_all.side_effect = HttpResponseError(
+        "(AuthorizationFailed) no access to Microsoft.Compute"
+    )
+
+    # Act
+    with patch.object(compute, "get_client", return_value=client):
+        with pytest.raises(compute.AzureVirtualMachineInventoryError) as raised:
+            compute.get_vm_list(MagicMock(), "sub-1")
+
+    # Assert
+    assert isinstance(raised.value, compute.AzureVirtualMachineInventoryError)
+    assert raised.value.subscription_id == "sub-1"
+
+
+def test_get_vm_list_raises_on_a_transport_failure_too():
+    # Arrange
+    client = MagicMock()
+    client.virtual_machines.list_all.side_effect = ServiceRequestTimeoutError(
+        "connection timed out"
+    )
+
+    # Act and assert
+    with patch.object(compute, "get_client", return_value=client):
+        with pytest.raises(compute.AzureVirtualMachineInventoryError):
+            compute.get_vm_list(MagicMock(), "sub-1")
+
+
+def test_get_vm_list_returns_empty_when_azure_answers_with_no_vms():
+    """An answered read of zero VMs is authoritative absence and must stay []."""
+    # Arrange
+    client = MagicMock()
+    client.virtual_machines.list_all.return_value = []
+
+    # Act
+    with patch.object(compute, "get_client", return_value=client):
+        result = compute.get_vm_list(MagicMock(), "sub-1")
+
+    # Assert
+    assert result == []

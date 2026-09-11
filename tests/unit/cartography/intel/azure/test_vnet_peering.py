@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 import cartography.intel.azure.vnet_peering as vnet_peering
 from tests.data.azure.vnet_peering import LOCAL_VNET_ID
+from tests.data.azure.vnet_peering import MOCK_PEERING_ACCESS_DISABLED
 from tests.data.azure.vnet_peering import MOCK_PEERINGS
 from tests.data.azure.vnet_peering import MOCK_PEERINGS_NESTED
 from tests.data.azure.vnet_peering import REMOTE_VNET_ID
@@ -62,3 +63,26 @@ def test_collect_gathers_rows_without_loading_them():
 
     # Assert
     assert [row["REMOTE_VNET_ID"] for row in rows] == [REMOTE_VNET_ID]
+
+
+def test_transform_carries_the_connectivity_controls():
+    """peering_state alone does not say whether traffic flows: ARM reports Connected
+    while allow_virtual_network_access is false."""
+    # Act
+    result = vnet_peering.transform_vnet_peerings(
+        LOCAL_VNET_ID, MOCK_PEERING_ACCESS_DISABLED
+    )
+
+    # Assert
+    assert result[0]["peering_state"] == "Connected"
+    assert result[0]["allow_virtual_network_access"] is False
+    assert result[0]["use_remote_gateways"] is True
+
+
+def test_transform_reads_the_connectivity_controls_from_nested_camel_case():
+    # Act
+    result = vnet_peering.transform_vnet_peerings(LOCAL_VNET_ID, MOCK_PEERINGS_NESTED)
+
+    # Assert
+    assert result[0]["allow_virtual_network_access"] is True
+    assert result[0]["use_remote_gateways"] is False
