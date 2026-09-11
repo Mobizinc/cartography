@@ -28,6 +28,10 @@ class AzureVirtualNetworkProperties(CartographyNodeProperties):
         "provisioning_state",
         description="Current provisioning state of the virtual network.",
     )
+    address_prefixes: PropertyRef = PropertyRef(
+        "address_prefixes",
+        description="Address space prefixes declared on the virtual network.",
+    )
     lastupdated: PropertyRef = PropertyRef("lastupdated", set_in_kwargs=True)
 
 

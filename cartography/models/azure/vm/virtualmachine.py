@@ -75,6 +75,16 @@ class AzureVirtualMachineProperties(CartographyNodeProperties):
     priority: PropertyRef = PropertyRef(
         "priority", description="Allocation priority of the virtual machine."
     )
+    power_state: PropertyRef = PropertyRef(
+        "power_state",
+        description="Latest power state from the instance view, e.g. running or "
+        "deallocated. Absent when the instance view was not readable.",
+    )
+    power_state_read_at: PropertyRef = PropertyRef(
+        "power_state_read_at",
+        description="When this sync read the power state. ARM does not stamp the "
+        "PowerState status, so this is the read clock, not a source observation time.",
+    )
     eviction_policy: PropertyRef = PropertyRef(
         "eviction_policy",
         description="Eviction policy for a Spot virtual machine.",

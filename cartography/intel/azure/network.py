@@ -30,6 +30,9 @@ from cartography.models.azure.tags.virtual_network_tag import (
 from cartography.models.azure.virtual_network import AzureVirtualNetworkSchema
 from cartography.util import timeit
 
+from . import route_table
+from . import vnet_peering
+from .util import arm_id
 from .util.credentials import Credentials
 
 logger = logging.getLogger(__name__)
@@ -114,9 +117,18 @@ def transform_virtual_networks(vnets: list[dict]) -> list[dict]:
                     "provisioning_state",
                     "provisioningState",
                 ),
+                "address_prefixes": _address_prefixes(
+                    _get_value(vnet, "address_space", "addressSpace")
+                ),
             }
         )
     return transformed
+
+
+def _address_prefixes(address_space: Any) -> list[str] | None:
+    if not isinstance(address_space, dict):
+        return None
+    return address_space.get("address_prefixes") or address_space.get("addressPrefixes")
 
 
 def transform_subnets(subnets: list[dict]) -> list[dict]:
@@ -131,6 +143,11 @@ def transform_subnets(subnets: list[dict]) -> list[dict]:
         if network_security_group:
             nsg_id = network_security_group.get("id")
 
+        route_table_ref = _get_value(subnet, "route_table", "routeTable")
+        route_table_id = (
+            route_table_ref.get("id") if isinstance(route_table_ref, dict) else None
+        )
+
         transformed.append(
             {
                 "id": subnet.get("id"),
@@ -140,7 +157,13 @@ def transform_subnets(subnets: list[dict]) -> list[dict]:
                     "address_prefix",
                     "addressPrefix",
                 ),
+                "address_prefixes": _get_value(
+                    subnet,
+                    "address_prefixes",
+                    "addressPrefixes",
+                ),
                 "nsg_id": nsg_id,
+                "route_table_id": route_table_id,
             }
         )
     return transformed
@@ -602,6 +625,8 @@ def _sync_subnets(
     """
     Syncs Subnets and their relationships for a given list of VNets.
     """
+    route_table_ids = arm_id.stored_ids(neo4j_session, "AzureRouteTable")
+
     for vnet in vnets:
         vnet_id = vnet["id"]
         rg_name = _get_resource_group_from_id(vnet_id)
@@ -623,6 +648,18 @@ def _sync_subnets(
                 neo4j_session, subnet_nsg_rels, vnet_id, update_tag
             )
 
+        route_table_rels = route_table.transform_subnet_route_table_links(
+            transformed_subnets
+        )
+        if route_table_rels:
+            route_table.load_subnet_route_table_relationships(
+                neo4j_session,
+                route_table_rels,
+                subscription_id,
+                update_tag,
+                route_table_ids,
+            )
+
         subnet_cleanup_params = common_job_parameters.copy()
         subnet_cleanup_params["VNET_ID"] = vnet_id
         GraphJob.from_node_schema(AzureSubnetSchema(), subnet_cleanup_params).run(
@@ -637,13 +674,20 @@ def sync(
     subscription_id: str,
     update_tag: int,
     common_job_parameters: dict,
-) -> None:
+) -> list[dict[str, Any]]:
+    """Returns the VNet peering rows collected for this subscription, unloaded."""
     logger.info(f"Syncing Azure Networking for subscription {subscription_id}.")
     client = NetworkManagementClient(credentials.credential, subscription_id)
 
     vnets = _sync_virtual_networks(
         neo4j_session, client, subscription_id, update_tag, common_job_parameters
     )
+
+    # Route tables must be synced before Subnets so that Subnet->RouteTable links resolve
+    route_table.sync(
+        neo4j_session, client, subscription_id, update_tag, common_job_parameters
+    )
+
     _sync_network_security_groups(
         neo4j_session, client, subscription_id, update_tag, common_job_parameters
     )
@@ -659,6 +703,13 @@ def sync(
             common_job_parameters,
         )
 
+    # Outside the guard: subnet cleanup is scoped per VNet, so an authoritative empty VNet
+    # list cleans no subnets and would otherwise strand their route-table links forever.
+    # Every current link has loaded by now, whether that was none or many.
+    route_table.cleanup_subnet_route_table_relationships(
+        neo4j_session, common_job_parameters
+    )
+
     # Public IPs must be synced before Network Interfaces so that NIC→PublicIP relationships work
     _sync_public_ip_addresses(
         neo4j_session, client, subscription_id, update_tag, common_job_parameters
@@ -667,3 +718,7 @@ def sync(
     _sync_network_interfaces(
         neo4j_session, client, subscription_id, update_tag, common_job_parameters
     )
+
+    # Collected, not loaded: a peering can name a VNet in a subscription this run has not
+    # synced yet. The caller loads them once every subscription's VNets exist.
+    return vnet_peering.collect(client, vnets)

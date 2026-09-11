@@ -18,6 +18,7 @@ from cartography.models.azure.vm.snapshot import AzureSnapshotSchema
 from cartography.models.azure.vm.virtualmachine import AzureVirtualMachineSchema
 from cartography.util import timeit
 
+from . import vm_power_state
 from .util.common import copy_properties
 from .util.common import extract_identity_principal_ids
 from .util.credentials import Credentials
@@ -144,6 +145,7 @@ def get_vm_list(credentials: Credentials, subscription_id: str) -> List[Dict]:
             x = vm["id"].split("/")
             vm["resource_group"] = x[x.index("resourcegroups") + 1]
 
+        vm_power_state.enrich(client, vm_list)
         return vm_list
 
     except HttpResponseError as e:
@@ -322,6 +324,7 @@ def sync_virtual_machine(
     common_job_parameters: Dict,
 ) -> None:
     vm_list = get_vm_list(credentials, subscription_id)
+    vm_power_state.backfill(neo4j_session, subscription_id, vm_list)
     transformed_vm_list, transformed_data_disk_list = transform_vm_list(vm_list)
     load_vms(neo4j_session, subscription_id, transformed_vm_list, update_tag)
     load_vm_data_disks(

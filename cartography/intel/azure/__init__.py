@@ -42,6 +42,7 @@ from . import storage
 from . import subscription
 from . import synapse
 from . import tenant
+from . import vnet_peering
 from . import workload_identity
 from .data_factory_util import AzureDataFactoryTransientError
 from .util.credentials import Authenticator
@@ -109,7 +110,8 @@ def _sync_one_subscription(
     subscription_id: str,
     update_tag: int,
     common_job_parameters: dict,
-) -> None:
+) -> list[dict]:
+    """Returns this subscription's collected VNet peering rows, for the caller to load."""
     compute.sync(
         neo4j_session,
         credentials.credential,
@@ -230,7 +232,7 @@ def _sync_one_subscription(
         update_tag,
         common_job_parameters,
     )
-    network.sync(
+    vnet_peering_rows = network.sync(
         neo4j_session,
         credentials,
         subscription_id,
@@ -299,6 +301,7 @@ def _sync_one_subscription(
         update_tag,
         common_job_parameters,
     )
+    return vnet_peering_rows
 
 
 def _sync_tenant(
@@ -352,6 +355,7 @@ def _sync_multiple_subscriptions(
         common_job_parameters,
     )
 
+    peering_rows_by_subscription: dict[str, list[dict]] = {}
     try:
         for sub in subscriptions:
             logger.info(
@@ -359,15 +363,26 @@ def _sync_multiple_subscriptions(
             )
             common_job_parameters["AZURE_SUBSCRIPTION_ID"] = sub["subscriptionId"]
 
-            _sync_one_subscription(
-                neo4j_session,
-                credentials,
-                sub["subscriptionId"],
-                update_tag,
-                common_job_parameters,
+            peering_rows_by_subscription[sub["subscriptionId"]] = (
+                _sync_one_subscription(
+                    neo4j_session,
+                    credentials,
+                    sub["subscriptionId"],
+                    update_tag,
+                    common_job_parameters,
+                )
             )
     finally:
         common_job_parameters.pop("AZURE_SUBSCRIPTION_ID", None)
+
+    # Peerings load last: a peering can name a VNet in another subscription, and
+    # load_matchlinks joins only endpoints that already exist.
+    vnet_peering.sync(
+        neo4j_session,
+        peering_rows_by_subscription,
+        update_tag,
+        common_job_parameters,
+    )
 
 
 @timeit
