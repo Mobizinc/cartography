@@ -36,6 +36,16 @@ class AzureVirtualNetworkPeeringRelProperties(CartographyRelProperties):
         "allow_gateway_transit",
         description="Whether the remote VNet may use this VNet's gateway.",
     )
+    allow_virtual_network_access: PropertyRef = PropertyRef(
+        "allow_virtual_network_access",
+        description="Whether address space in the remote VNet is reachable. A peering "
+        "can report Connected with this false, in which case no traffic flows.",
+    )
+    use_remote_gateways: PropertyRef = PropertyRef(
+        "use_remote_gateways",
+        description="Whether this VNet routes through the remote VNet's gateway. Valid "
+        "only when the remote peering sets allow_gateway_transit.",
+    )
 
 
 @dataclass(frozen=True)

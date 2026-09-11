@@ -5,6 +5,7 @@ from typing import Mapping
 from typing import Tuple
 
 import neo4j
+from azure.core.exceptions import AzureError
 from azure.core.exceptions import HttpResponseError
 from azure.mgmt.compute import ComputeManagementClient
 
@@ -24,6 +25,17 @@ from .util.common import extract_identity_principal_ids
 from .util.credentials import Credentials
 
 logger = logging.getLogger(__name__)
+
+
+class AzureVirtualMachineInventoryError(Exception):
+    """The virtual machine inventory for a subscription could not be read."""
+
+    def __init__(self, subscription_id: str) -> None:
+        super().__init__(
+            f"Could not read the virtual machine inventory for subscription "
+            f"{subscription_id}. Refusing to treat the failure as an empty inventory."
+        )
+        self.subscription_id = subscription_id
 
 
 def _copy_nested_properties(data: Dict, mapping: Mapping[str, tuple[str, ...]]) -> Dict:
@@ -148,9 +160,12 @@ def get_vm_list(credentials: Credentials, subscription_id: str) -> List[Dict]:
         vm_power_state.enrich(client, vm_list)
         return vm_list
 
-    except HttpResponseError as e:
-        logger.warning(f"Error while retrieving virtual machines - {e}")
-        return []
+    except AzureError as e:
+        # Raised, not swallowed. An empty list means Azure answered and the subscription
+        # holds no VMs, which cleanup_virtual_machine treats as authoritative absence and
+        # deletes the whole inventory on. A failed read is unknown coverage, not absence,
+        # so it must never reach that cleanup.
+        raise AzureVirtualMachineInventoryError(subscription_id) from e
 
 
 def load_vms(

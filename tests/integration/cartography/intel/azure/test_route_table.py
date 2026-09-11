@@ -266,7 +266,6 @@ def test_empty_vnet_result_still_cleans_stale_subnet_route_links(
         "AzureRouteTable",
         "id",
         "ROUTED_BY",
-        # Arrange
     ) == {(MOCK_TRANSFORMED_SUBNETS[0]["id"], ROUTE_TABLE_ID)}
 
     # Arrange - Azure now authoritatively reports no VNets at all.
