@@ -7,20 +7,12 @@ from azure.mgmt.network import NetworkManagementClient
 from cartography.client.core.tx import load_matchlinks
 from cartography.graph.job import GraphJob
 from cartography.intel.azure.util import arm_id
+from cartography.intel.azure.util.common import get_value
+from cartography.intel.azure.util.common import reference_id
 from cartography.models.azure.vnet_peering import AzureVirtualNetworkPeeringRel
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
-
-
-def _get_value(data: dict[str, Any], *keys: str) -> Any:
-    properties = data.get("properties") or {}
-    for key in keys:
-        if key in data:
-            return data[key]
-        if key in properties:
-            return properties[key]
-    return None
 
 
 def _get_resource_group_from_id(resource_id: str) -> str:
@@ -47,10 +39,9 @@ def transform_vnet_peerings(vnet_id: str, peerings: list[dict]) -> list[dict]:
     """
     transformed: list[dict[str, Any]] = []
     for peering in peerings:
-        remote = (
-            _get_value(peering, "remote_virtual_network", "remoteVirtualNetwork") or {}
+        remote_id = reference_id(
+            peering, "remote_virtual_network", "remoteVirtualNetwork"
         )
-        remote_id = remote.get("id") if isinstance(remote, dict) else None
         if not remote_id:
             logger.warning(
                 "Skipping peering %s on %s: it names no remote virtual network id.",
@@ -63,19 +54,19 @@ def transform_vnet_peerings(vnet_id: str, peerings: list[dict]) -> list[dict]:
                 "NODE_ID": vnet_id,
                 "REMOTE_VNET_ID": remote_id,
                 "peering_name": peering.get("name"),
-                "peering_state": _get_value(peering, "peering_state", "peeringState"),
-                "allow_forwarded_traffic": _get_value(
+                "peering_state": get_value(peering, "peering_state", "peeringState"),
+                "allow_forwarded_traffic": get_value(
                     peering, "allow_forwarded_traffic", "allowForwardedTraffic"
                 ),
-                "allow_gateway_transit": _get_value(
+                "allow_gateway_transit": get_value(
                     peering, "allow_gateway_transit", "allowGatewayTransit"
                 ),
-                "allow_virtual_network_access": _get_value(
+                "allow_virtual_network_access": get_value(
                     peering,
                     "allow_virtual_network_access",
                     "allowVirtualNetworkAccess",
                 ),
-                "use_remote_gateways": _get_value(
+                "use_remote_gateways": get_value(
                     peering, "use_remote_gateways", "useRemoteGateways"
                 ),
             }

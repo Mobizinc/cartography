@@ -1,12 +1,10 @@
 import logging
 from typing import Dict
 from typing import List
-from typing import Mapping
 from typing import Tuple
 
 import neo4j
 from azure.core.exceptions import AzureError
-from azure.core.exceptions import HttpResponseError
 from azure.mgmt.compute import ComputeManagementClient
 
 from cartography.client.core.tx import load
@@ -27,26 +25,34 @@ from .util.credentials import Credentials
 logger = logging.getLogger(__name__)
 
 
-class AzureVirtualMachineInventoryError(Exception):
-    """The virtual machine inventory for a subscription could not be read."""
+class AzureInventoryError(Exception):
+    """An inventory read for a subscription failed.
+
+    An empty list means Azure answered and the subscription holds none of the resource,
+    which the cleanup job treats as authoritative absence and deletes the stored inventory
+    on. A failed read is unknown coverage, so it is raised and never reaches that cleanup.
+    """
+
+    inventory = "inventory"
 
     def __init__(self, subscription_id: str) -> None:
         super().__init__(
-            f"Could not read the virtual machine inventory for subscription "
+            f"Could not read the {self.inventory} for subscription "
             f"{subscription_id}. Refusing to treat the failure as an empty inventory."
         )
         self.subscription_id = subscription_id
 
 
-def _copy_nested_properties(data: Dict, mapping: Mapping[str, tuple[str, ...]]) -> Dict:
-    for target, sources in mapping.items():
-        if target in data:
-            continue
-        for source in sources:
-            if source in data:
-                data[target] = data[source]
-                break
-    return data
+class AzureVirtualMachineInventoryError(AzureInventoryError):
+    inventory = "virtual machine inventory"
+
+
+class AzureDiskInventoryError(AzureInventoryError):
+    inventory = "managed disk inventory"
+
+
+class AzureSnapshotInventoryError(AzureInventoryError):
+    inventory = "disk snapshot inventory"
 
 
 def transform_vm(vm: Dict) -> Dict:
@@ -67,25 +73,25 @@ def transform_vm(vm: Dict) -> Dict:
     )
     hardware_profile = vm.get("hardware_profile") or {}
     if isinstance(hardware_profile, dict):
-        _copy_nested_properties(hardware_profile, {"vm_size": ("vmSize",)})
+        copy_properties(hardware_profile, {"vm_size": ("vmSize",)})
 
     os_profile = vm.get("os_profile") or {}
     if isinstance(os_profile, dict):
-        _copy_nested_properties(os_profile, {"computer_name": ("computerName",)})
+        copy_properties(os_profile, {"computer_name": ("computerName",)})
 
     additional_capabilities = vm.get("additional_capabilities") or {}
     if isinstance(additional_capabilities, dict):
-        _copy_nested_properties(
+        copy_properties(
             additional_capabilities,
             {"ultra_ssd_enabled": ("ultraSSDEnabled",)},
         )
 
     storage_profile = vm.get("storage_profile") or {}
     if isinstance(storage_profile, dict):
-        _copy_nested_properties(storage_profile, {"data_disks": ("dataDisks",)})
+        copy_properties(storage_profile, {"data_disks": ("dataDisks",)})
         for data_disk in storage_profile.get("data_disks") or []:
             if isinstance(data_disk, dict):
-                _copy_nested_properties(
+                copy_properties(
                     data_disk,
                     {
                         "disk_size_gb": ("diskSizeGB",),
@@ -96,7 +102,7 @@ def transform_vm(vm: Dict) -> Dict:
                 )
                 managed_disk = data_disk.get("managed_disk") or {}
                 if isinstance(managed_disk, dict):
-                    _copy_nested_properties(
+                    copy_properties(
                         managed_disk,
                         {"storage_account_type": ("storageAccountType",)},
                     )
@@ -161,10 +167,6 @@ def get_vm_list(credentials: Credentials, subscription_id: str) -> List[Dict]:
         return vm_list
 
     except AzureError as e:
-        # Raised, not swallowed. An empty list means Azure answered and the subscription
-        # holds no VMs, which cleanup_virtual_machine treats as authoritative absence and
-        # deletes the whole inventory on. A failed read is unknown coverage, not absence,
-        # so it must never reach that cleanup.
         raise AzureVirtualMachineInventoryError(subscription_id) from e
 
 
@@ -240,9 +242,8 @@ def get_disks(credentials: Credentials, subscription_id: str) -> List[Dict]:
 
         return disk_list
 
-    except HttpResponseError as e:
-        logger.warning(f"Error while retrieving disks - {e}")
-        return []
+    except AzureError as e:
+        raise AzureDiskInventoryError(subscription_id) from e
 
 
 def load_disks(
@@ -279,9 +280,8 @@ def get_snapshots_list(credentials: Credentials, subscription_id: str) -> List[D
 
         return snapshots
 
-    except HttpResponseError as e:
-        logger.warning(f"Error while retrieving snapshots - {e}")
-        return []
+    except AzureError as e:
+        raise AzureSnapshotInventoryError(subscription_id) from e
 
 
 def load_snapshots(
