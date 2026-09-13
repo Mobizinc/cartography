@@ -179,3 +179,126 @@ def test_transform_network_interfaces_handles_sdk_31_camel_properties():
     assert interfaces[0]["private_ip_addresses"] == ["10.0.0.4"]
     assert interfaces[0]["NSG_ID"] == "nsg-id"
     assert interfaces[0]["VIRTUAL_MACHINE_ID"] == "vm-id"
+
+
+# The field set and nesting of `NetworkInterface.as_dict()` on azure-mgmt-network 31.0.1:
+# two IP configurations, only the second of which has a public IP.
+NIC_WITH_TWO_IP_CONFIGURATIONS = {
+    "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/networkInterfaces/nic-1",
+    "name": "nic-1",
+    "location": "eastus",
+    "properties": {
+        "macAddress": "00-0D-3A-1B-2C-3D",
+        "ipConfigurations": [
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/networkInterfaces/nic-1/ipConfigurations/ipconfig1",
+                "name": "ipconfig1",
+                "properties": {
+                    "primary": True,
+                    "privateIPAddress": "10.0.0.4",
+                    "privateIPAllocationMethod": "Dynamic",
+                    "subnet": {
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/virtualNetworks/vnet-1/subnets/app",
+                    },
+                },
+            },
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/networkInterfaces/nic-1/ipConfigurations/ipconfig2",
+                "name": "ipconfig2",
+                "properties": {
+                    "primary": False,
+                    "privateIPAddress": "10.0.1.5",
+                    "privateIPAllocationMethod": "Static",
+                    "subnet": {
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/virtualNetworks/vnet-1/subnets/edge",
+                    },
+                    "publicIPAddress": {
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/publicIPAddresses/pip-1",
+                    },
+                },
+            },
+        ],
+    },
+}
+
+APP_SUBNET = "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/virtualNetworks/vnet-1/subnets/app"
+EDGE_SUBNET = "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/virtualNetworks/vnet-1/subnets/edge"
+PUBLIC_IP = "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Network/publicIPAddresses/pip-1"
+
+
+def test_transform_network_interfaces_keeps_each_ip_configuration_together():
+    """Which subnet a public IP is reachable on is a fact of the configuration that binds
+    them. Three parallel lists cannot state it: the configuration without a public IP
+    shortens one list, so the same index names a different configuration in each."""
+    interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
+
+    assert interface["ip_configurations"] == [
+        {
+            "name": "ipconfig1",
+            "private_ip_address": "10.0.0.4",
+            "private_ip_allocation_method": "Dynamic",
+            "primary": True,
+            "subnet_id": APP_SUBNET,
+            "public_ip_id": None,
+        },
+        {
+            "name": "ipconfig2",
+            "private_ip_address": "10.0.1.5",
+            "private_ip_allocation_method": "Static",
+            "primary": False,
+            "subnet_id": EDGE_SUBNET,
+            "public_ip_id": PUBLIC_IP,
+        },
+    ]
+
+
+def test_transform_network_interfaces_derives_its_id_lists_from_the_configurations():
+    """The relationship matchers read these three, so they carry what the configurations
+    state, in order, and nothing else."""
+    interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
+
+    assert interface["SUBNET_IDS"] == [APP_SUBNET, EDGE_SUBNET]
+    assert interface["PUBLIC_IP_IDS"] == [PUBLIC_IP]
+    assert interface["private_ip_addresses"] == ["10.0.0.4", "10.0.1.5"]
+
+
+def test_transform_network_interfaces_names_a_shared_subnet_once():
+    """Two configurations on one subnet are one attachment, not two."""
+    nic = {
+        "properties": {
+            "ipConfigurations": [
+                {"name": "ipconfig1", "properties": {"subnet": {"id": APP_SUBNET}}},
+                {"name": "ipconfig2", "properties": {"subnet": {"id": APP_SUBNET}}},
+            ]
+        }
+    }
+
+    interface = transform_network_interfaces([nic])[0]
+
+    assert [c["subnet_id"] for c in interface["ip_configurations"]] == [
+        APP_SUBNET,
+        APP_SUBNET,
+    ]
+    assert interface["SUBNET_IDS"] == [APP_SUBNET]
+
+
+def test_transform_network_interfaces_reads_a_nested_mac_address():
+    """`as_dict()` returns it as `properties.macAddress`, so a top-level-only read stored
+    every NIC in the subscription with no MAC address at all."""
+    interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
+
+    assert interface["mac_address"] == "00-0D-3A-1B-2C-3D"
+
+
+def test_transform_network_interfaces_handles_a_nic_with_no_ip_configurations():
+    interface = transform_network_interfaces(
+        [{"id": "nic-id", "name": "nic", "location": "eastus", "properties": {}}]
+    )[0]
+
+    assert interface["ip_configurations"] == []
+    assert interface["SUBNET_IDS"] == []
+    assert interface["PUBLIC_IP_IDS"] == []
+    assert interface["private_ip_addresses"] == []
+    assert interface["mac_address"] is None
+    assert interface["VIRTUAL_MACHINE_ID"] is None
+    assert interface["NSG_ID"] is None

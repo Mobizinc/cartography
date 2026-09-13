@@ -35,24 +35,49 @@ def extract_identity_principal_ids(identity: Any) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def get_value(data: Any, *keys: str) -> Any:
+    """
+    The first of `keys` present on `data` or inside its ARM `properties` block.
+
+    The current Azure SDK hybrid models serialize `as_dict()` in wire format, so
+    resource-specific fields live under `properties` with camelCase names, while older
+    SDKs returned them flat and snake_case. Callers name every spelling a field is known
+    by, in order of preference, and read either shape.
+    """
+    if not isinstance(data, dict):
+        return None
+    properties = data.get("properties") or {}
+    for key in keys:
+        if key in data:
+            return data[key]
+        if key in properties:
+            return properties[key]
+    return None
+
+
+def reference_id(data: Any, *keys: str) -> str | None:
+    """
+    The resource id of a reference ARM returns as `{"id": ...}`, or None when the field is
+    absent or carries something else.
+    """
+    reference = get_value(data, *keys)
+    return reference.get("id") if isinstance(reference, dict) else None
+
+
 def copy_properties(data: dict, mapping: Mapping[str, tuple[str, ...]]) -> dict:
     """
     Lift fields out of an ARM `properties` block onto the top level of `data`.
 
-    The current Azure SDK hybrid models serialize `as_dict()` in wire format, so
-    resource-specific fields live under `properties` with camelCase names. The graph
-    models read flat snake_case keys, so each mapping entry names the target key and
-    the wire spellings to look for, in order of preference. Existing top-level keys
-    are never overwritten.
+    The graph models read flat snake_case keys, so each mapping entry names the target key
+    and the wire spellings to look for, in order of preference. Existing top-level keys are
+    never overwritten.
     """
-    properties = data.get("properties") or {}
     for target, sources in mapping.items():
         if target in data:
             continue
-        for source in sources:
-            if source in properties:
-                data[target] = properties[source]
-                break
+        value = get_value(data, *sources)
+        if value is not None:
+            data[target] = value
     return data
 
 

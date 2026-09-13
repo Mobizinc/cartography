@@ -33,23 +33,11 @@ from cartography.util import timeit
 from . import route_table
 from . import vnet_peering
 from .util import arm_id
+from .util.common import get_value
+from .util.common import reference_id
 from .util.credentials import Credentials
 
 logger = logging.getLogger(__name__)
-
-
-def _get_properties(data: dict[str, Any]) -> dict[str, Any]:
-    return data.get("properties") or {}
-
-
-def _get_value(data: dict[str, Any], *keys: str) -> Any:
-    properties = _get_properties(data)
-    for key in keys:
-        if key in data:
-            return data[key]
-        if key in properties:
-            return properties[key]
-    return None
 
 
 def _get_resource_group_from_id(resource_id: str) -> str:
@@ -112,13 +100,13 @@ def transform_virtual_networks(vnets: list[dict]) -> list[dict]:
                 "name": vnet.get("name"),
                 "location": vnet.get("location"),
                 "tags": vnet.get("tags"),
-                "provisioning_state": _get_value(
+                "provisioning_state": get_value(
                     vnet,
                     "provisioning_state",
                     "provisioningState",
                 ),
                 "address_prefixes": _address_prefixes(
-                    _get_value(vnet, "address_space", "addressSpace")
+                    get_value(vnet, "address_space", "addressSpace")
                 ),
             }
         )
@@ -134,36 +122,24 @@ def _address_prefixes(address_space: Any) -> list[str] | None:
 def transform_subnets(subnets: list[dict]) -> list[dict]:
     transformed: list[dict[str, Any]] = []
     for subnet in subnets:
-        nsg_id = None
-        network_security_group = _get_value(
-            subnet,
-            "network_security_group",
-            "networkSecurityGroup",
-        )
-        if network_security_group:
-            nsg_id = network_security_group.get("id")
-
-        route_table_ref = _get_value(subnet, "route_table", "routeTable")
-        route_table_id = (
-            route_table_ref.get("id") if isinstance(route_table_ref, dict) else None
-        )
-
         transformed.append(
             {
                 "id": subnet.get("id"),
                 "name": subnet.get("name"),
-                "address_prefix": _get_value(
+                "address_prefix": get_value(
                     subnet,
                     "address_prefix",
                     "addressPrefix",
                 ),
-                "address_prefixes": _get_value(
+                "address_prefixes": get_value(
                     subnet,
                     "address_prefixes",
                     "addressPrefixes",
                 ),
-                "nsg_id": nsg_id,
-                "route_table_id": route_table_id,
+                "nsg_id": reference_id(
+                    subnet, "network_security_group", "networkSecurityGroup"
+                ),
+                "route_table_id": reference_id(subnet, "route_table", "routeTable"),
             }
         )
     return transformed
@@ -193,8 +169,8 @@ def transform_network_security_rules(nsgs: list[dict]) -> list[dict]:
         nsg_id = nsg.get("id")
 
         rule_collections = (
-            (_get_value(nsg, "security_rules", "securityRules") or []),
-            (_get_value(nsg, "default_security_rules", "defaultSecurityRules") or []),
+            (get_value(nsg, "security_rules", "securityRules") or []),
+            (get_value(nsg, "default_security_rules", "defaultSecurityRules") or []),
         )
         is_default_flags = (False, True)
 
@@ -246,8 +222,8 @@ def transform_public_ip_addresses(public_ips: list[dict]) -> list[dict]:
                 "id": public_ip.get("id"),
                 "name": public_ip.get("name"),
                 "location": public_ip.get("location"),
-                "ip_address": _get_value(public_ip, "ip_address", "ipAddress"),
-                "public_ip_allocation_method": _get_value(
+                "ip_address": get_value(public_ip, "ip_address", "ipAddress"),
+                "public_ip_allocation_method": get_value(
                     public_ip,
                     "public_ip_allocation_method",
                     "publicIPAllocationMethod",
@@ -257,76 +233,64 @@ def transform_public_ip_addresses(public_ips: list[dict]) -> list[dict]:
     return transformed
 
 
+def transform_ip_configuration(ip_config: dict) -> dict[str, Any]:
+    """One IP configuration of a network interface.
+
+    The private address, the subnet and the public IP stay in the configuration that binds
+    them: which subnet a given public IP is reachable on is a fact of the configuration,
+    and separate lists cannot state it.
+    """
+    return {
+        "name": ip_config.get("name"),
+        "private_ip_address": get_value(
+            ip_config, "private_ip_address", "privateIPAddress"
+        ),
+        "private_ip_allocation_method": get_value(
+            ip_config, "private_ip_allocation_method", "privateIPAllocationMethod"
+        ),
+        "primary": get_value(ip_config, "primary"),
+        "subnet_id": reference_id(ip_config, "subnet"),
+        "public_ip_id": reference_id(ip_config, "public_ip_address", "publicIPAddress"),
+    }
+
+
+def _stated(ip_configurations: list[dict], field: str) -> list[str]:
+    """The values the configurations state for one field, in order, without repeats."""
+    return list(dict.fromkeys(c[field] for c in ip_configurations if c[field]))
+
+
 def transform_network_interfaces(network_interfaces: list[dict]) -> list[dict]:
     transformed: list[dict[str, Any]] = []
     for interface in network_interfaces:
-        subnet_ids: list[str] = []
-        public_ip_ids: list[str] = []
-        private_ips: list[str] = []
-
-        for ip_config in (
-            _get_value(
-                interface,
-                "ip_configurations",
-                "ipConfigurations",
+        ip_configurations = [
+            transform_ip_configuration(ip_config)
+            for ip_config in get_value(
+                interface, "ip_configurations", "ipConfigurations"
             )
             or []
-        ):
-            # Azure SDK as_dict() may return properties nested or flattened
-            # Try nested first (properties wrapper), then flattened (direct access)
-            ip_config_props = ip_config.get("properties", {})
-
-            # Get subnet ID - try nested then flattened
-            subnet_ref = ip_config_props.get("subnet") or ip_config.get("subnet")
-            if subnet_ref and isinstance(subnet_ref, dict):
-                subnet_id = subnet_ref.get("id")
-                if subnet_id:
-                    subnet_ids.append(subnet_id)
-
-            # Get public IP ID - try nested then flattened
-            public_ip_ref = (
-                ip_config_props.get("public_ip_address")
-                or ip_config_props.get("publicIPAddress")
-                or ip_config.get("public_ip_address")
-                or ip_config.get("publicIPAddress")
-            )
-            if public_ip_ref and isinstance(public_ip_ref, dict):
-                public_ip_id = public_ip_ref.get("id")
-                if public_ip_id:
-                    public_ip_ids.append(public_ip_id)
-
-            # Get private IP - try nested then flattened
-            private_ip = (
-                ip_config_props.get("private_ip_address")
-                or ip_config_props.get("privateIPAddress")
-                or ip_config.get("private_ip_address")
-                or ip_config.get("privateIPAddress")
-            )
-            if private_ip:
-                private_ips.append(private_ip)
+        ]
 
         # Handle case where virtual_machine can be None (unattached NIC)
         # Lowercase the VM ID to match the normalized VM node id (Azure APIs
         # return inconsistent casing for resource group names across services)
-        vm_ref = _get_value(interface, "virtual_machine", "virtualMachine")
-        vm_id = vm_ref.get("id").lower() if vm_ref and vm_ref.get("id") else None
-
-        nsg_ref = _get_value(
-            interface, "network_security_group", "networkSecurityGroup"
-        )
-        nsg_id = nsg_ref.get("id") if nsg_ref and isinstance(nsg_ref, dict) else None
+        vm_id = reference_id(interface, "virtual_machine", "virtualMachine")
 
         transformed.append(
             {
                 "id": interface.get("id"),
                 "name": interface.get("name"),
                 "location": interface.get("location"),
-                "mac_address": interface.get("mac_address"),
-                "private_ip_addresses": private_ips,
-                "VIRTUAL_MACHINE_ID": vm_id,
-                "SUBNET_IDS": subnet_ids,
-                "PUBLIC_IP_IDS": public_ip_ids,
-                "NSG_ID": nsg_id,
+                "mac_address": get_value(interface, "mac_address", "macAddress"),
+                "ip_configurations": ip_configurations,
+                "private_ip_addresses": _stated(
+                    ip_configurations, "private_ip_address"
+                ),
+                "VIRTUAL_MACHINE_ID": vm_id.lower() if vm_id else None,
+                "SUBNET_IDS": _stated(ip_configurations, "subnet_id"),
+                "PUBLIC_IP_IDS": _stated(ip_configurations, "public_ip_id"),
+                "NSG_ID": reference_id(
+                    interface, "network_security_group", "networkSecurityGroup"
+                ),
             }
         )
     return transformed

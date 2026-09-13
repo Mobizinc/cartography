@@ -156,3 +156,49 @@ def test_get_vm_list_returns_empty_when_azure_answers_with_no_vms():
 
     # Assert
     assert result == []
+
+
+@pytest.mark.parametrize(
+    "collection,read,error",
+    [
+        ("disks", compute.get_disks, compute.AzureDiskInventoryError),
+        ("snapshots", compute.get_snapshots_list, compute.AzureSnapshotInventoryError),
+    ],
+)
+def test_disk_and_snapshot_reads_raise_instead_of_reporting_an_empty_inventory(
+    collection, read, error
+):
+    """Same shape as the VM inventory: cleanup_disks and cleanup_snapshot delete on an
+    empty list, so a refused read must not arrive as one."""
+    # Arrange
+    client = MagicMock()
+    getattr(client, collection).list.side_effect = HttpResponseError(
+        "(AuthorizationFailed) no access to Microsoft.Compute"
+    )
+
+    # Act
+    with patch.object(compute, "get_client", return_value=client):
+        with pytest.raises(error) as raised:
+            read(MagicMock(), "sub-1")
+
+    # Assert
+    assert raised.value.subscription_id == "sub-1"
+
+
+@pytest.mark.parametrize(
+    "collection,read",
+    [("disks", compute.get_disks), ("snapshots", compute.get_snapshots_list)],
+)
+def test_disk_and_snapshot_reads_return_empty_when_azure_answers_with_none(
+    collection, read
+):
+    # Arrange
+    client = MagicMock()
+    getattr(client, collection).list.return_value = []
+
+    # Act
+    with patch.object(compute, "get_client", return_value=client):
+        result = read(MagicMock(), "sub-1")
+
+    # Assert
+    assert result == []

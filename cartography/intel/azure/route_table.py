@@ -8,22 +8,13 @@ from cartography.client.core.tx import load
 from cartography.client.core.tx import load_matchlinks
 from cartography.graph.job import GraphJob
 from cartography.intel.azure.util import arm_id
+from cartography.intel.azure.util.common import get_value
 from cartography.models.azure.route_table import AzureRouteSchema
 from cartography.models.azure.route_table import AzureRouteTableSchema
 from cartography.models.azure.route_table import AzureSubnetToRouteTableRel
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
-
-
-def _get_value(data: dict[str, Any], *keys: str) -> Any:
-    properties = data.get("properties") or {}
-    for key in keys:
-        if key in data:
-            return data[key]
-        if key in properties:
-            return properties[key]
-    return None
 
 
 @timeit
@@ -40,10 +31,10 @@ def transform_route_tables(route_tables: list[dict]) -> list[dict]:
                 "id": table.get("id"),
                 "name": table.get("name"),
                 "location": table.get("location"),
-                "provisioning_state": _get_value(
+                "provisioning_state": get_value(
                     table, "provisioning_state", "provisioningState"
                 ),
-                "disable_bgp_route_propagation": _get_value(
+                "disable_bgp_route_propagation": get_value(
                     table,
                     "disable_bgp_route_propagation",
                     "disableBgpRoutePropagation",
@@ -58,17 +49,17 @@ def transform_routes(route_tables: list[dict]) -> list[dict]:
     transformed: list[dict[str, Any]] = []
     for table in route_tables:
         table_id = table.get("id")
-        for route in _get_value(table, "routes") or []:
+        for route in get_value(table, "routes") or []:
             transformed.append(
                 {
                     "id": route.get("id"),
                     "name": route.get("name"),
                     "ROUTE_TABLE_ID": table_id,
-                    "address_prefix": _get_value(
+                    "address_prefix": get_value(
                         route, "address_prefix", "addressPrefix"
                     ),
-                    "next_hop_type": _get_value(route, "next_hop_type", "nextHopType"),
-                    "next_hop_ip_address": _get_value(
+                    "next_hop_type": get_value(route, "next_hop_type", "nextHopType"),
+                    "next_hop_ip_address": get_value(
                         route, "next_hop_ip_address", "nextHopIpAddress"
                     ),
                 }
