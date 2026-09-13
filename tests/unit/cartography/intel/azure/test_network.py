@@ -230,8 +230,10 @@ def test_transform_network_interfaces_keeps_each_ip_configuration_together():
     """Which subnet a public IP is reachable on is a fact of the configuration that binds
     them. Three parallel lists cannot state it: the configuration without a public IP
     shortens one list, so the same index names a different configuration in each."""
+    # Act
     interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
 
+    # Assert
     assert interface["ip_configurations"] == [
         {
             "name": "ipconfig1",
@@ -255,8 +257,10 @@ def test_transform_network_interfaces_keeps_each_ip_configuration_together():
 def test_transform_network_interfaces_derives_its_id_lists_from_the_configurations():
     """The relationship matchers read these three, so they carry what the configurations
     state, in order, and nothing else."""
+    # Act
     interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
 
+    # Assert
     assert interface["SUBNET_IDS"] == [APP_SUBNET, EDGE_SUBNET]
     assert interface["PUBLIC_IP_IDS"] == [PUBLIC_IP]
     assert interface["private_ip_addresses"] == ["10.0.0.4", "10.0.1.5"]
@@ -264,6 +268,7 @@ def test_transform_network_interfaces_derives_its_id_lists_from_the_configuratio
 
 def test_transform_network_interfaces_names_a_shared_subnet_once():
     """Two configurations on one subnet are one attachment, not two."""
+    # Arrange
     nic = {
         "properties": {
             "ipConfigurations": [
@@ -273,8 +278,10 @@ def test_transform_network_interfaces_names_a_shared_subnet_once():
         }
     }
 
+    # Act
     interface = transform_network_interfaces([nic])[0]
 
+    # Assert
     assert [c["subnet_id"] for c in interface["ip_configurations"]] == [
         APP_SUBNET,
         APP_SUBNET,
@@ -285,16 +292,20 @@ def test_transform_network_interfaces_names_a_shared_subnet_once():
 def test_transform_network_interfaces_reads_a_nested_mac_address():
     """`as_dict()` returns it as `properties.macAddress`, so a top-level-only read stored
     every NIC in the subscription with no MAC address at all."""
+    # Act
     interface = transform_network_interfaces([NIC_WITH_TWO_IP_CONFIGURATIONS])[0]
 
+    # Assert
     assert interface["mac_address"] == "00-0D-3A-1B-2C-3D"
 
 
 def test_transform_network_interfaces_handles_a_nic_with_no_ip_configurations():
+    # Act
     interface = transform_network_interfaces(
         [{"id": "nic-id", "name": "nic", "location": "eastus", "properties": {}}]
     )[0]
 
+    # Assert
     assert interface["ip_configurations"] == []
     assert interface["SUBNET_IDS"] == []
     assert interface["PUBLIC_IP_IDS"] == []
